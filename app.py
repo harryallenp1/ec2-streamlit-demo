@@ -71,6 +71,57 @@ else:
 data = load_and_clean(source)
 cost_cols = [c for c in COST_COLUMNS if c in data.columns]
 
+
+# ---------------- Sidebar filters ----------------
+def storage_type(value) -> str:
+    s = str(value)
+    if "EBS" in s:
+        return "EBS"
+    if "NVMe SSD" in s:
+        return "NVMe SSD"
+    if "HDD" in s:
+        return "HDD"
+    if "SSD" in s:
+        return "SSD"
+    return "Other"
+
+
+data["Storage Type"] = data["Instance Storage"].apply(storage_type)
+data["Monthly On Demand"] = data["On Demand"] * 730
+
+st.sidebar.header("Filters")
+
+max_mem_all = float(data["Instance Memory"].max())
+max_mem = st.sidebar.slider("Maximum Memory (GiB)", 0.0, max_mem_all, max_mem_all)
+
+vcpu_options = sorted(data["vCPUs"].dropna().unique().astype(int).tolist())
+vcpus = st.sidebar.multiselect("vCPU Count", vcpu_options, default=vcpu_options)
+
+net_options = sorted(data["Network Performance"].dropna().unique().tolist())
+networks = st.sidebar.multiselect("Network Performance", net_options, default=net_options)
+
+storage_options = sorted(data["Storage Type"].unique().tolist())
+storages = st.sidebar.multiselect("Storage Type", storage_options, default=storage_options)
+
+max_price_all = float(data["On Demand"].max())
+max_price = st.sidebar.slider("Maximum Hourly Price ($)", 0.0, max_price_all, max_price_all)
+
+max_month_all = float(data["Monthly On Demand"].max())
+max_month = st.sidebar.slider("Maximum Monthly Cost ($)", 0.0, max_month_all, max_month_all)
+
+data = data[
+    ((data["Instance Memory"] <= max_mem) | data["Instance Memory"].isna())
+    & (data["vCPUs"].isin(vcpus) | data["vCPUs"].isna())
+    & data["Network Performance"].isin(networks)
+    & data["Storage Type"].isin(storages)
+    & ((data["On Demand"] <= max_price) | (data["On Demand"].isna() & (max_price >= max_price_all)))
+    & ((data["Monthly On Demand"] <= max_month) | (data["Monthly On Demand"].isna() & (max_month >= max_month_all)))
+].copy()
+
+if len(data) < 10:
+    st.warning(f"Only {len(data)} instances match the filters — widen them to see the analysis.")
+    st.stop()
+
 tab1, tab2, tab3 = st.tabs(
     ["Part 1 · Explore costs", "Part 1 · Instance families", "Part 2 · Regression"]
 )
@@ -92,13 +143,14 @@ with tab1:
     st.subheader("Cost distribution by pricing option")
     log_scale = st.checkbox("Log scale (big instances squash the plot otherwise)", True)
     fig, ax = plt.subplots(figsize=(12, 5))
-    sns.boxplot(data=data[cost_cols], palette="Set2", ax=ax)
+    sns.boxplot(data=data[cost_cols].dropna(axis=1, how="all"), palette="Set2", ax=ax)
     if log_scale:
         ax.set_yscale("log")
     ax.set_ylabel("Cost (USD / hour)")
     ax.set_title("Cost Comparison of Amazon EC2 Instances (Hourly)")
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
     st.pyplot(fig)
+    plt.close(fig)
 
     st.subheader("Outliers (IQR method)")
     outlier_col = st.selectbox("Cost column", cost_cols)
@@ -140,11 +192,12 @@ with tab2:
         st.markdown(f"### {fam} — {len(fam_df)} instances")
         st.dataframe(fam_df[cost_cols].describe(), width="stretch")
         fig, ax = plt.subplots(figsize=(12, 4))
-        sns.boxplot(data=fam_df[cost_cols], palette="Blues", showmeans=True, ax=ax)
+        sns.boxplot(data=fam_df[cost_cols].dropna(axis=1, how="all"), palette="Blues", showmeans=True, ax=ax)
         ax.set_title(f"Cost Distribution for {fam} Instances")
         ax.set_ylabel("Cost (USD / hour)")
         plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
         st.pyplot(fig)
+        plt.close(fig)
 
     if chosen:
         st.markdown("### On-Demand vs Reserved across selected families")
@@ -190,6 +243,7 @@ with tab3:
     ax.set_xlabel("Actual On-Demand Cost")
     ax.set_ylabel("Predicted On-Demand Cost")
     st.pyplot(fig)
+    plt.close(fig)
 
     st.subheader("Predict a new instance")
     p1, p2 = st.columns(2)
